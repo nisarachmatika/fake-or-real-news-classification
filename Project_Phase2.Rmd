@@ -1,0 +1,195 @@
+---
+title: "Building 'Fake or Real News' Classification Models"
+        "Machine Learning Project - Phase 1"
+author: "Nisa Rachmatika (s3570512) -- H Ruda Nie (s3575040)"
+output: pdf_document
+---
+DISCUSSIONS AND RESULTS
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE, warning=FALSE)
+```
+
+```{r message=FALSE}
+library(ISLR)
+library(stringr)    
+library(tm)         
+library(wordcloud)  
+library(reshape2)  
+library(ggplot2) 
+library(caTools)
+library(reshape2)     # Used with ggplot
+library(kernlab)      # This has kernel methods used by the SVM classifier.
+library(e1071)        # The SVM we're going to use is in here.
+library(rpart)
+library(caret)
+library(randomForest)
+library(mlr)
+library(ROCR)
+```
+Load the data from the file containing the data set. We will analyse the text only in  "text" column of the file.
+```{r}
+fake.real.raw<- read.csv("Nisa.csv", header=FALSE,stringsAsFactors = FALSE)
+```
+
+```{r}
+text<-fake.real.raw$V1
+```
+After loading the data, the first cleaning step is to remove the special characters in the text.
+```{r}
+fake.real.text<-iconv(text,"UTF-8","ASCII",sub="")
+```
+Then, we will make the collection of the text by creating Corpus and cleaning the data by using tm_map function.
+```{r}
+mycorpus <- Corpus(VectorSource(fake.real.text))
+inspect(mycorpus[2])
+```
+```{r}
+mycorpus <- tm_map(mycorpus, content_transformer(tolower))
+mycorpus <- tm_map(mycorpus, removeNumbers)
+```
+We also want to remove the punctuation and stopwords, but in order to do that,  we need to create toSpace content transformer before remove the punctuation and stopWords
+```{r}
+toSpace<-(function(x,pattern){return(gsub(pattern," ",x))})
+mycorpus<-tm_map(mycorpus, toSpace, "-")
+mycorpus<-tm_map(mycorpus, toSpace, ":")
+mycorpus<-tm_map(mycorpus, toSpace, "'")
+```
+Removing the punctuation and stopWords
+```{r}
+mycorpus <- tm_map(mycorpus, content_transformer(removePunctuation))
+mycorpus <- tm_map(mycorpus, content_transformer(removeWords),stopwords("English"))
+mycorpus <- tm_map(mycorpus, content_transformer(stripWhitespace))
+```
+We do once more inspection to see whether all the data is cleaning up
+```{r}
+inspect(mycorpus[2])
+```
+From the text above, most of the cleaning has been succesfully done so we can move to the next step to build Document Term Matrix.
+We will make 2 text transformation of Document Term Matrix (tf-vectorizer and tf-idf vectorizer) 
+
+
+a. Document Term Matrix - tf Vectorizer
+In this Document Term Matrix, the word length is limited from 5 to 20. Also, each word must appear at least in 5 docs.
+```{r}
+my_dtm <- DocumentTermMatrix(mycorpus,control = list(wordLengths=c(5,20), minDocFreq=5))
+inspect(my_dtm)
+```
+From the inspection, we can see the matrix is very sparse (100%). The next step is to reduce this sparsity with the code below:
+```{r}
+my_dtm <- removeSparseTerms(my_dtm, 0.93)
+```
+```{r}
+inspect(my_dtm)
+```
+As the result above, the sparsity now reduced (become 94%). Also, the terms dimension is reduced significantly from 70064 to only 2317.
+
+Now since we get a better matrix, we can inspect this matrix. The first step that we did is finding the most frequent word from this matrix by assigning it to a dataframe. Here we only show most frequent words that appears more than 4500 times.
+```{r}
+word.freq.a<-sort(colSums(as.matrix(my_dtm)),decreasing = TRUE)
+header.a <- head(word.freq.a,100)
+View(word.freq.a)
+word.freq.ab <- subset(word.freq.a, word.freq.a >= 1000)
+df.a <- data.frame(term = names(word.freq.ab), freq = word.freq.ab)
+df.a
+```
+Because this report is about election, we can expect that the most frequent term is about election. "trump", "clinton", "campaign", "president", and "election" become some of the most frequent words here.
+
+
+b. Document Term Matrix - tf-idf vectorizer
+Now we will make another Document Term Matrix with the weighting of tf-idf. As before, in this Document Term Matrix the word length is limited from 5 to 20. Also, each word must appear at least in 5 docs.
+```{r}
+my_dtm.tfidf <- DocumentTermMatrix(mycorpus,control = list(weighting=function(x) weightTfIdf(x, normalize = FALSE), wordLengths=c(5,20), minDocFreq=5))
+inspect(my_dtm.tfidf)
+```
+As before, we can see the matrix is very sparse (100%). The next step is to reduce this sparsity with the code below:
+```{r}
+my_dtm.tfidf <- removeSparseTerms(my_dtm.tfidf, 0.93)
+```
+```{r}
+inspect(my_dtm.tfidf)
+```
+Similar with the part a, the sparsity now reduced (become 94%). Also, the terms dimension is reduced significantly.
+
+The most frequent words that appears more than 4500 times is shown below.
+```{r}
+word.freq.tfidf<-sort(colSums(as.matrix(my_dtm.tfidf)),decreasing = TRUE)
+header <- head(word.freq.tfidf,100)
+word.freq.tfidf.a <- subset(word.freq.tfidf, word.freq.tfidf >= 1000)
+df.tfidf <- data.frame(term = names(word.freq.tfidf.a), freq = word.freq.tfidf.a)
+df.tfidf
+```
+After using tf-idf text transformation, it appears that the most frequent words is changing. "trump" and "clinton" still dominated, but now "sanders" and "obama" also become the top 4 of the most frequent words. Now we plot graphs to present clearer visualization of our cleaning result.   
+
+Making the model for TF
+```{r}
+mydata.X <- as.matrix(my_dtm)
+mydata.X <- as.data.frame(mydata.X)
+mydata.Y <- fake.real.raw$V2
+mydata.Y <-as.data.frame(mydata.Y)
+merge_data <- cbind(mydata.X, mydata.Y)
+merge_data$mydata.Y
+str(merge_data$mydata.Y)
+
+smp_size <- floor(0.75 * nrow(merge_data))
+set.seed(123)
+train_ind <- sample(seq_len(nrow(merge_data)), size = smp_size)
+
+train_datas <- merge_data[train_ind, ]
+test_datas <- merge_data[-train_ind, ]
+```
+RANDOM FOREST MODEL
+You want enough trees to stabilize the error but not so many that you over correlate the ensemble, which leads to overfit.
+I would keep the ntree an odd number so ties can be broken.
+The model is trained against 30 most popular words
+```{r}
+model<-randomForest(mydata.Y~trump+clinton+people+state+president+campaign+obama+hillary+states+republican+first+election+party+american+political+government+years+house+going+world+percent+presidential+white+democratic+sanders+think+donald+voters+right+country+republicans+united+support+media+national+former+still+since+police+candidate+public+according+america+policy+another+democrats+washington+military+called+security+russia+every+debate+never+including+among+change+congress+clintons+power+trumps+whether+foreign+black+federal+women+department+court+group+around+three+might+times+million+point+system+likely+general+really+officials+secretary+senate+saying+without+money+things+already+believe+syria+administration+emails+something+email+recent+report+health+office+primary,data=train_datas)#,mtry=4,ntree=1501)
+model
+importance(model)
+varImpPlot(model)
+par(mfrow=c(1,1))
+
+predictrftree<-predict(model,test_datas,type = "class")
+table(predictrftree,test_datas$mydata.Y)
+mean(predictrftree==test_datas$mydata.Y)
+```
+Making the model for TF-IDF
+```{r}
+mydata.X.tfidf <- as.matrix(my_dtm.tfidf)
+mydata.X.tfidf <- as.data.frame(mydata.X.tfidf)
+mydata.Y.tfidf <- fake.real.raw$V2
+mydata.Y.tfidf <-as.data.frame(mydata.Y.tfidf)
+merge_data.tfidf <- cbind(mydata.X.tfidf, mydata.Y.tfidf)
+#merge_data$mydata.Y
+#str(merge_data.tfidf$mydata.Y.tfidf)
+
+smp_size <- floor(0.75 * nrow(merge_data.tfidf))
+set.seed(123)
+train_ind.tfidf <- sample(seq_len(nrow(merge_data.tfidf)), size = smp_size)
+
+train_datas.tfidf <- merge_data[train_ind.tfidf, ]
+test_datas.tfidf <- merge_data[-train_ind.tfidf, ]
+```
+RANDOM FOREST MODEL FOR TF_IDF
+```{r}
+model.tfidf<-randomForest(mydata.Y~trump+clinton+sanders+obama+campaign+percent+state+hillary+party+people+police+president+republican+election+states+voters+government+russia+house+political+american+white+democratic+world+black+court+debate+media+military+united+trumps+presidential+donald+democrats+russian+going+syria+years+emails+think+women+first+country+policy+candidate+nuclear+former+right+security+support+congress+department+national+health+foreign+public+senate+federal+million+power+still+according+system+change+washington+among+officials+since+money+administration+group+primary+investigation+rights+every+justice+never+secretary+another+tuesday+general+information+attack+voting+convention+nominee+whether+might+islamic+called+conservative+economic+three, data=train_datas.tfidf)#,mtry=4,ntree=3001)
+model.tfidf
+importance(model.tfidf)
+varImpPlot(model.tfidf)
+
+predictrftree.tfidf<-predict(model.tfidf,test_datas.tfidf,type = "class")
+table(predictrftree.tfidf,test_datas.tfidf$mydata.Y)
+mean(predictrftree.tfidf==test_datas.tfidf$mydata.Y)
+
+```
+
+
+```{r}
+set.seed(200)
+traind=sample(1:nrow(merge_data),5990)
+traind<-as.data.frame(traind)
+tree.left=tree(mydata.Y~.,merge_data,subset = train_datas)
+tree.predict=predict(tree.left,test,type = "class")
+with(test,table(tree.predict,left))
+(2819+819)/3750 #(97%)
+

@@ -1,0 +1,291 @@
+---
+title: "Building 'Fake or Real News' Classification Models"
+        "Machine Learning Project - Phase 1"
+author: "Nisa Rachmatika (s3570512) -- H Ruda Nie (s3575040)"
+output: pdf_document
+---
+DISCUSSIONS AND RESULTS
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE, warning=FALSE)
+```
+
+```{r message=FALSE}
+library(ISLR)
+library(stringr)    
+library(tm)         
+library(wordcloud)  
+library(reshape2)  
+library(ggplot2) 
+library(caTools)
+library(reshape2)     # Used with ggplot
+library(kernlab)      # This has kernel methods used by the SVM classifier.
+library(e1071)        # The SVM we're going to use is in here.
+library(rpart)
+library(sqldf)
+```
+Load the data from the file containing the data set. We will analyse the text only in  "text" column of the file.
+```{r}
+fake.real.raw<- read.csv("Nisa.csv", header=FALSE,stringsAsFactors = FALSE)
+```
+
+```{r}
+text<-fake.real.raw$V1
+```
+After loading the data, the first cleaning step is to remove the special characters in the text.
+```{r}
+fake.real.text<-iconv(text,"UTF-8","ASCII",sub="")
+```
+Then, we will make the collection of the text by creating Corpus and cleaning the data by using tm_map function.
+```{r}
+mycorpus <- Corpus(VectorSource(fake.real.text))
+inspect(mycorpus[2])
+```
+```{r}
+mycorpus <- tm_map(mycorpus, content_transformer(tolower))
+mycorpus <- tm_map(mycorpus, removeNumbers)
+```
+We also want to remove the punctuation and stopwords, but in order to do that,  we need to create toSpace content transformer before remove the punctuation and stopWords
+```{r}
+toSpace<-(function(x,pattern){return(gsub(pattern," ",x))})
+mycorpus<-tm_map(mycorpus, toSpace, "-")
+mycorpus<-tm_map(mycorpus, toSpace, ":")
+mycorpus<-tm_map(mycorpus, toSpace, "'")
+```
+Removing the punctuation and stopWords
+```{r}
+mycorpus <- tm_map(mycorpus, content_transformer(removePunctuation))
+mycorpus <- tm_map(mycorpus, content_transformer(removeWords),stopwords("English"))
+mycorpus <- tm_map(mycorpus, content_transformer(stripWhitespace))
+```
+We do once more inspection to see whether all the data is cleaning up
+```{r}
+inspect(mycorpus[2])
+```
+From the text above, most of the cleaning has been succesfully done so we can move to the next step to build Document Term Matrix.
+We will make 2 text transformation of Document Term Matrix (tf-vectorizer and tf-idf vectorizer) 
+
+
+a. Document Term Matrix - tf Vectorizer
+In this Document Term Matrix, the word length is limited from 5 to 20. Also, each word must appear at least in 5 docs.
+```{r}
+my_dtm <- DocumentTermMatrix(mycorpus,control = list(wordLengths=c(5,20), minDocFreq=10))
+inspect(my_dtm)
+```
+From the inspection, we can see the matrix is very sparse (100%). The next step is to reduce this sparsity with the code below:
+```{r}
+my_dtm <- removeSparseTerms(my_dtm, 0.99)
+```
+```{r}
+inspect(my_dtm)
+```
+As the result above, the sparsity now reduced (become 94%). Also, the terms dimension is reduced significantly from 70064 to only 2317.
+
+Now since we get a better matrix, we can inspect this matrix. The first step that we did is finding the most frequent word from this matrix by assigning it to a dataframe. Here we only show most frequent words that appears more than 4500 times.
+```{r}
+word.freq.a<-sort(colSums(as.matrix(my_dtm)),decreasing = TRUE)
+View(word.freq.a)
+word.freq.ab <- subset(word.freq.a, word.freq.a >= 1000)
+df.a <- data.frame(term = names(word.freq.ab), freq = word.freq.ab)
+df.a
+```
+Because this report is about election, we can expect that the most frequent term is about election. "trump", "clinton", "campaign", "president", and "election" become some of the most frequent words here.
+
+
+b. Document Term Matrix - tf-idf vectorizer
+Now we will make another Document Term Matrix with the weighting of tf-idf. As before, in this Document Term Matrix the word length is limited from 5 to 20. Also, each word must appear at least in 5 docs.
+```{r}
+my_dtm.tfidf <- DocumentTermMatrix(mycorpus,control = list(weighting=function(x) weightTfIdf(x, normalize = FALSE), wordLengths=c(5,20), minDocFreq=5))
+inspect(my_dtm.tfidf)
+```
+As before, we can see the matrix is very sparse (100%). The next step is to reduce this sparsity with the code below:
+```{r}
+my_dtm.tfidf <- removeSparseTerms(my_dtm.tfidf, 0.995)
+```
+```{r}
+inspect(my_dtm.tfidf)
+```
+Similar with the part a, the sparsity now reduced (become 94%). Also, the terms dimension is reduced significantly.
+
+The most frequent words that appears more than 4500 times is shown below.
+```{r}
+word.freq.tfidf<-sort(colSums(as.matrix(my_dtm.tfidf)),decreasing = TRUE)
+#header <- head(word.freq.tfidf,100)
+word.freq.tfidf.a <- subset(word.freq.tfidf, word.freq.tfidf >= 100)
+df.tfidf <- data.frame(term = names(word.freq.tfidf.a), freq = word.freq.tfidf.a)
+df.tfidf
+```
+After using tf-idf text transformation, it appears that the most frequent words is changing. "trump" and "clinton" still dominated, but now "sanders" and "obama" also become the top 4 of the most frequent words. Now we plot graphs to present clearer visualization of our cleaning result.   
+
+
+PLOTTING THE RESULT
+
+GGPlot
+GGPlot for tf Document Term Matrix: 
+```{r}
+gg1<-ggplot(df,aes(x= reorder(term, freq), y=freq)) + geom_bar(stat="identity")+
+         xlab("Terms")+ylab("Count")+coord_flip()+
+         theme(axis.text = element_text(size=7))
+gg1
+```
+GGPlot for tf-idf Document Term Matrix: 
+```{r}
+gg2<-ggplot(df.tfidf,aes(x= reorder(term, freq), y=freq)) + geom_bar(stat="identity")+
+         xlab("Terms")+ylab("Count")+coord_flip()+
+         theme(axis.text = element_text(size=7))
+gg2
+```
+From both of GGPlot, it can be seen that the number of word frequency is different. For example, in tf-idf vectorizer "trump" word mentioned around 29,576 times, while this word was only 19,898 times in tf vectorizer.
+
+Also, the number of most frequent words are slightly different. For instance, "russia" words did not appear in 50 most frequent words in tf vectorizer, while it appears as number 18 of the most frequent word in tf-idf vectorizer, indicating the news has situated "russia" as an important factor in 2016 US presidential election. 
+
+Clearly that tf-idf vectorizer has succesfully reduced the un-unique word and replaced it with more meaningful word. 
+
+Now, we try to find association between words that we found. 
+First, we will examine the association in tf vectorizer. The correlation limit is set to 0.3, when 0 means less correlation and closer to 1 means stronger correlation. 
+```{r}
+findAssocs(my_dtm, "clinton", corlimit=0.3)
+findAssocs(my_dtm, "trump", corlimit=0.3)
+findAssocs(my_dtm, "obama", corlimit=0.3)
+findAssocs(my_dtm, "sanders", corlimit=0.3)
+```
+Here we choose the word of the main actor in 2016 US Presidential election and see what words correlated with these persons. In "clinton" word,for example, the "secretary" and "emails" words appears, indicated that the news put more attention with Hillary Clinton "scandal" when she used her private email server for official communication during her tenure as US Secretary of State. "clinton" also related to "benghazi", indicated the news also paid attention with another Hillary Clinton scandal in 2012 attack on a US diplomatic compound in Benghazi,Libya.
+
+We can see also "sanders" is related to "hillary" words, indicating the news' attention of their rivalry in Democrat party. When we speak about "trump" words, news indicate him as a "billionaire", and while we check on "obama", news still put attention in his "obamacare".
+
+However, the correlation is ranged between 0.3 to 0.6. Therefore, even though there will be some correlations, it is not enough strong.
+
+To make a better understanding about these word correlations, we make correlation plot as below:
+```{r}
+library(graph)
+library(Rgraphviz)
+freq.terms<-findFreqTerms(my_dtm,lowfreq = 4500)
+plot(my_dtm, term = freq.terms, corThreshold=0.3, weighting = T)
+```
+
+Second, we will examine the word association in tf-idf vectorizer. As being done before, we put the main actor in 2016 US Presidential election and see what words correlated with these persons 
+```{r}
+findAssocs(my_dtm.tfidf, "clinton", corlimit=0.3)
+findAssocs(my_dtm.tfidf, "trump", corlimit=0.3)
+findAssocs(my_dtm.tfidf, "obama", corlimit=0.3)
+findAssocs(my_dtm.tfidf, "sanders", corlimit=0.3)
+```
+Here, the word associations is not much different with tf vectorizer.   
+The correlation plot presented below:
+```{r}
+freq.terms2<-findFreqTerms(my_dtm.tfidf,lowfreq = 8000)
+plot(my_dtm.tfidf, term = freq.terms2, corThreshold=0.3, weighting = T)
+```
+
+Next we made a wordcloud and we can see how this words distributed.
+tf vecorizer wordcloud
+```{r}
+m <- as.matrix(my_dtm)
+# calculate the frequency of words and sort it by frequency
+word.freq <- sort(colSums(m), decreasing = T)
+# colors
+pal <- brewer.pal(9, "BuGn")[-(1:4)]
+
+wordcloud(words = names(word.freq), freq = word.freq, min.freq = 3500,
+          random.order = F, colors = pal)
+```
+tf-idf vecorizer wordcloud
+```{r}
+m <- as.matrix(my_dtm.tfidf)
+# calculate the frequency of words and sort it by frequency
+word.freq <- sort(colSums(m), decreasing = T)
+# colors
+pal <- brewer.pal(9, "BuGn")[-(1:4)]
+
+wordcloud(words = names(word.freq), freq = word.freq, min.freq = 3500,
+          random.order = F, colors = pal)
+```
+From the wordcloud we can see that there is some words that appear in tf-idf vectorizer, but did not appear in tf vectorizer such as "military", "syria", "russia", and "police".
+
+Making the model for TF
+```{r}
+mydata.X <- as.matrix(my_dtm)
+mydata.X <- as.data.frame(mydata.X)
+mydata.Y <- fake.real.raw$V2
+mydata.Y <-as.data.frame(mydata.Y)
+merge_data <- cbind(mydata.X, mydata.Y)
+merge_data$mydata.Y
+str(merge_data$mydata.Y)
+
+mydata.X <- as.matrix(df.a)
+mydata.X <- as.data.frame(mydata.X)
+mydata.Y <- fake.real.raw$label
+mydata.Y <-as.data.frame(mydata.Y)
+merge_data <- cbind(mydata.X, mydata.Y)
+merge_data <- as.data.frame(merge_data)
+merge_data$mydata.Y
+str(mydata.Y)
+
+set.seed(200)
+sample <- sample.split(merge_data$mydata.Y,SplitRatio = .50)
+train_data <- subset(merge_data,sample == FALSE)
+test_data <- subset(merge_data, sample == TRUE)
+train_data<-as.data.frame(train_data)
+
+```
+SVM modelling
+```{r}
+#tune.out=tune(svm ,mydata.Y ~ ., data=merge_data, kernel ="radial",
+ #             ranges=list(cost=c(0.1,1,10,100,200,500,1000),
+  #                        gamma=c(0.01,0.1,0.5,1,2,3,4) ))
+
+tune.out=tune(svm ,mydata.Y ~ ., data=merge_data, kernel ="radial",
+              ranges=list(cost=c(1000),
+                          gamma=c(0.1) ))
+
+summary (tune.out,10)
+
+cost = tune.out$best.parameters[1,1]
+gamma = tune.out$best.parameters[1,2]
+
+svm.model <- svm(train.Y ~ ., data = train.svm, cost = cost, gamma = gamma,probability = TRUE)
+svm.pred <- predict(svm.model, test.svm)
+
+svm.prob<- predict(svm.model, test.svm,probability=TRUE)
+svm.prob=attr(svm.prob,"probabilities")
+svm.prob=svm.prob[,2]
+
+confusionMatrix(svm.pred,test.Y,positive="AD")
+auc(as.numeric(test.Y)-1,svm.prob)
+{plot(svm.prob,col=c("blue","red")[test.Y])
+abline(0.5,0)}
+
+models.cv <- tune.svm(merge_data ~ ., data = train, kernel='radial', gamma=10^(seq(-4, -2, length.out = 24)), 
+                  cost=10^(seq(1, 3, length.out = 10)))
+summary(models.cv)
+plot(models.cv)
+```
+
+```{r}
+set.seed(200)
+traind=sample(1:nrow(merge_data),5990)
+traind<-as.data.frame(traind)
+tree.left=tree(mydata.Y~.,merge_data,subset = train_data)
+tree.predict=predict(tree.left,test,type = "class")
+with(test,table(tree.predict,left))
+(2819+819)/3750 #(97%)
+
+
+library(randomForest)
+model<-randomForest(mydata.Y~.,data=test_data,mtry=3,ntree=300)
+
+str(merge_data)
+
+str(merge_data$mydata.Y)
+
+library(randomForest)
+model<-randomForest(mydata.Y~trump+clinton+people+state+president+campaign+obama+hillary+states+republican+first+election+party+american+political+government+years+house+going+world+percent+presidential+white+democratic+sanders+think+donald+voters+right+country,data=train_data,mtry=6,ntree=300)
+model
+importance(model)
+varImpPlot(model)
+
+predictrftree<-predict(model,test_data,type = "class")
+table(predictrftree,test_data$mydata.Y)
+mean(predictrftree==test_data$mydata.Y)
+
+```
